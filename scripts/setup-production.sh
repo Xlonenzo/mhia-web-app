@@ -1,93 +1,190 @@
 #!/bin/bash
 
-# MHIA Web App - Production Setup Script
-# Run this on your production server (Ubuntu/Debian)
+# MHIA Web App - Production Setup Script for Ubuntu
+# Supports Ubuntu 20.04, 22.04, and 24.04
 
 set -e  # Exit on error
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
 echo "================================================"
-echo "    MHIA Web App - Production Setup"
+echo "    MHIA Web App - Ubuntu Production Setup"
 echo "================================================"
 echo ""
 
+# Check Ubuntu version
+UBUNTU_VERSION=$(lsb_release -r -s)
+print_status "Detected Ubuntu version: $UBUNTU_VERSION"
+
+if [[ ! "$UBUNTU_VERSION" =~ ^(20.04|22.04|24.04) ]]; then
+    print_warning "This script is tested on Ubuntu 20.04, 22.04, and 24.04"
+    print_warning "Your version ($UBUNTU_VERSION) may work but is not officially supported"
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
 # Update system
-echo "[1/10] Updating system packages..."
+print_status "[1/12] Updating system packages..."
 sudo apt-get update
 sudo apt-get upgrade -y
 
 # Install system dependencies
-echo "[2/10] Installing system dependencies..."
+print_status "[2/12] Installing system dependencies..."
 sudo apt-get install -y \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
-    postgresql \
-    postgresql-contrib \
-    redis-server \
-    nginx \
-    certbot \
-    python3-certbot-nginx \
-    git \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release \
     curl \
+    wget \
+    git \
     build-essential \
     supervisor
 
+# Install Python 3.11 (add repository if needed)
+print_status "[3/12] Installing Python 3.11..."
+if [[ "$UBUNTU_VERSION" == "20.04" ]]; then
+    sudo add-apt-repository ppa:deadsnakes/ppa -y
+    sudo apt-get update
+fi
+
+sudo apt-get install -y \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3-pip
+
+# Install PostgreSQL
+print_status "[4/12] Installing PostgreSQL..."
+sudo apt-get install -y \
+    postgresql \
+    postgresql-contrib \
+    libpq-dev
+
+# Install Redis
+print_status "[5/12] Installing Redis..."
+sudo apt-get install -y redis-server
+
+# Install Nginx
+print_status "[6/12] Installing Nginx..."
+sudo apt-get install -y nginx
+
+# Install Certbot
+print_status "[7/12] Installing Certbot..."
+sudo apt-get install -y \
+    certbot \
+    python3-certbot-nginx
+
 # Install Node.js 18
-echo "[3/10] Installing Node.js 18..."
+print_status "[8/12] Installing Node.js 18..."
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
+# Verify installations
+print_status "Verifying installations..."
+python3.11 --version
+node --version
+npm --version
+
 # Setup PostgreSQL
-echo "[4/10] Setting up PostgreSQL..."
+print_status "[9/12] Setting up PostgreSQL..."
 sudo systemctl start postgresql
 sudo systemctl enable postgresql
 
+# Generate secure database password
+DB_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+
 # Create database and user
+print_status "Creating database and user..."
 sudo -u postgres psql << EOF
 CREATE DATABASE mhia_db;
-CREATE USER mhia_user WITH ENCRYPTED PASSWORD 'CHANGE_THIS_PASSWORD';
+CREATE USER mhia_user WITH ENCRYPTED PASSWORD '$DB_PASSWORD';
 GRANT ALL PRIVILEGES ON DATABASE mhia_db TO mhia_user;
+ALTER DATABASE mhia_db OWNER TO mhia_user;
 EOF
 
+print_success "Database created with user 'mhia_user'"
+echo "Database password: $DB_PASSWORD"
+
 # Setup Redis
-echo "[5/10] Configuring Redis..."
+print_status "[10/12] Configuring Redis..."
+# Configure Redis for production
+sudo sed -i 's/^# requirepass foobared/requirepass $(python3 -c "import secrets; print(secrets.token_urlsafe(32))")/' /etc/redis/redis.conf
+sudo sed -i 's/^save 900 1/# save 900 1/' /etc/redis/redis.conf
+sudo sed -i 's/^save 300 10/# save 300 10/' /etc/redis/redis.conf  
+sudo sed -i 's/^save 60 10000/save 60 1000/' /etc/redis/redis.conf
 sudo systemctl start redis-server
 sudo systemctl enable redis-server
 
 # Setup application directory
-echo "[6/10] Setting up application..."
-cd /opt
-sudo mkdir -p mhia-web-app
-sudo chown $USER:$USER mhia-web-app
-cd mhia-web-app
+print_status "[11/12] Setting up application..."
+sudo mkdir -p /opt/mhia-web-app
+sudo chown $USER:$USER /opt/mhia-web-app
+cd /opt/mhia-web-app
 
 # Clone or update repository
 if [ -d ".git" ]; then
-    echo "Updating existing repository..."
+    print_status "Updating existing repository..."
     git pull origin main
 else
-    echo "Cloning repository..."
-    echo "Enter your GitHub repository URL:"
-    read REPO_URL
+    print_status "Cloning repository..."
+    if [ -z "$REPO_URL" ]; then
+        echo "Enter your GitHub repository URL (or press Enter for default):"
+        read REPO_URL
+        if [ -z "$REPO_URL" ]; then
+            REPO_URL="https://github.com/Xlonenzo/mhia-web-app.git"
+        fi
+    fi
     git clone $REPO_URL .
 fi
 
 # Setup backend
-echo "[7/10] Setting up backend..."
+print_status "Setting up backend..."
 cd backend
+
+# Create virtual environment
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Create .env file
-echo "[8/10] Creating environment configuration..."
+# Generate JWT secret
+JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')
+
+# Create .env file with generated passwords
+print_status "Creating environment configuration..."
 cat > .env << EOF
 # Database
-DATABASE_URL=postgresql://mhia_user:CHANGE_THIS_PASSWORD@localhost/mhia_db
+DATABASE_URL=postgresql://mhia_user:$DB_PASSWORD@localhost/mhia_db
 
 # Security
-JWT_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')
+JWT_SECRET_KEY=$JWT_SECRET
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -95,21 +192,31 @@ REDIS_URL=redis://localhost:6379
 # Environment
 ENVIRONMENT=production
 
-# CORS
+# CORS (update with your domain)
 CORS_ORIGINS=["https://yourdomain.com"]
+
+# API Settings
+API_V1_STR=/api/v1
+PROJECT_NAME=MHIA Web App
 EOF
 
-echo "Please edit /opt/mhia-web-app/backend/.env to update passwords and domain"
+print_success "Backend environment configuration created"
+print_warning "Please edit /opt/mhia-web-app/backend/.env to update your domain"
 
 # Run database migrations
-echo "Running database migrations..."
-alembic upgrade head
+print_status "Running database migrations..."
+if [ -f "alembic.ini" ]; then
+    alembic upgrade head
+    print_success "Database migrations completed"
+else
+    print_warning "No alembic.ini found, skipping migrations"
+fi
 
 deactivate
 cd ..
 
 # Setup frontend
-echo "[9/10] Building frontend..."
+print_status "[12/12] Setting up frontend..."
 cd frontend
 
 # Create production .env
@@ -118,13 +225,24 @@ NEXT_PUBLIC_API_URL=https://yourdomain.com/api
 NEXT_PUBLIC_ENVIRONMENT=production
 EOF
 
+print_status "Installing frontend dependencies..."
 npm install
+
+print_status "Building frontend for production..."
 npm run build
 
+print_success "Frontend build completed"
 cd ..
 
+# Configure UFW firewall
+print_status "Configuring firewall..."
+sudo ufw --force enable
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw status
+
 # Setup Nginx
-echo "[10/10] Configuring Nginx..."
+print_status "Configuring Nginx..."
 sudo tee /etc/nginx/sites-available/mhia > /dev/null << EOF
 server {
     listen 80;
@@ -205,23 +323,64 @@ sudo supervisorctl reread
 sudo supervisorctl update
 sudo supervisorctl start all
 
+# Save important information
+echo "
+================================================
+IMPORTANT: Save this information securely!
+================================================
+Database Password: $DB_PASSWORD
+JWT Secret: $JWT_SECRET
+Server IP: $(curl -s ifconfig.me || echo 'Unknown')
+================================================
+" | sudo tee /opt/mhia-web-app/SETUP_INFO.txt
+
 echo ""
-echo "================================================"
-echo "    Production Setup Complete!"
-echo "================================================"
+print_success "================================================"
+print_success "    Ubuntu Production Setup Complete!"
+print_success "================================================"
 echo ""
-echo "Next steps:"
-echo "1. Edit /opt/mhia-web-app/backend/.env to set your passwords"
-echo "2. Edit /opt/mhia-web-app/frontend/.env.production to set your domain"
-echo "3. Update Nginx config with your domain: /etc/nginx/sites-available/mhia"
-echo "4. Setup SSL with: sudo certbot --nginx -d yourdomain.com"
-echo "5. Restart services:"
-echo "   sudo supervisorctl restart all"
-echo "   sudo systemctl restart nginx"
+print_status "Your MHIA Web App has been installed successfully!"
 echo ""
-echo "Service management:"
-echo "  Start: sudo supervisorctl start all"
-echo "  Stop: sudo supervisorctl stop all"
-echo "  Status: sudo supervisorctl status"
-echo "  Logs: tail -f /var/log/mhia/*.log"
+echo "📋 SETUP SUMMARY:"
+echo "   - Application Directory: /opt/mhia-web-app"
+echo "   - Database: PostgreSQL (mhia_db)"
+echo "   - Cache: Redis"
+echo "   - Web Server: Nginx"
+echo "   - Process Manager: Supervisor"
+echo ""
+echo "🔐 CREDENTIALS (also saved in /opt/mhia-web-app/SETUP_INFO.txt):"
+echo "   - Database User: mhia_user"
+echo "   - Database Password: $DB_PASSWORD"
+echo ""
+echo "🌐 NEXT STEPS:"
+echo "   1. Update your domain in these files:"
+echo "      - /opt/mhia-web-app/backend/.env (CORS_ORIGINS)"
+echo "      - /opt/mhia-web-app/frontend/.env.production (NEXT_PUBLIC_API_URL)"
+echo "      - /etc/nginx/sites-available/mhia (server_name)"
+echo ""
+echo "   2. Setup SSL certificate:"
+echo "      sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com"
+echo ""
+echo "   3. Restart services:"
+echo "      sudo supervisorctl restart all"
+echo "      sudo systemctl restart nginx"
+echo ""
+echo "🔧 SERVICE MANAGEMENT:"
+echo "   Start all:   sudo supervisorctl start all"
+echo "   Stop all:    sudo supervisorctl stop all"
+echo "   Status:      sudo supervisorctl status"
+echo "   Logs:        tail -f /var/log/mhia/*.log"
+echo "   Nginx:       sudo systemctl status nginx"
+echo ""
+echo "🌍 ACCESS YOUR APP:"
+if command -v curl &> /dev/null; then
+    PUBLIC_IP=$(curl -s ifconfig.me)
+    echo "   HTTP:  http://$PUBLIC_IP"
+    echo "   HTTPS: https://yourdomain.com (after SSL setup)"
+else
+    echo "   HTTP:  http://YOUR_SERVER_IP"
+    echo "   HTTPS: https://yourdomain.com (after SSL setup)"
+fi
+echo ""
+print_success "Setup completed successfully! 🎉"
 echo ""
