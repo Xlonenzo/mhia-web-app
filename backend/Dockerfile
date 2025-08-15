@@ -15,6 +15,7 @@ RUN apt-get update \
         build-essential \
         curl \
         git \
+        netcat-traditional \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -28,8 +29,7 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p uploads temp_outputs results logs
 
-# Make entrypoint script executable
-COPY entrypoint.sh .
+# Make entrypoint script executable (already copied with COPY . .)
 RUN chmod +x entrypoint.sh
 
 # Expose port
@@ -40,5 +40,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application
-ENTRYPOINT ["./entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["./entrypoint.sh"]
