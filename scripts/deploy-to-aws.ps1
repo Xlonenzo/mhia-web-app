@@ -76,8 +76,9 @@ Choose deployment option:
   [4] Just connect to server (SSH)
   [5] View server logs
   [6] Restart services only
-  [7] Test connection
-  [8] Exit
+  [7] Docker deployment (Frontend + Backend + PostgreSQL)
+  [8] Test connection
+  [9] Exit
 
 ================================================================
 "@ -ForegroundColor White
@@ -344,6 +345,45 @@ echo '[SUCCESS] Services restarted!'
     Write-Success "Services restarted!"
 }
 
+function Docker-Deploy {
+    Write-Host "================================================================" -ForegroundColor Yellow
+    Write-Host "                   DOCKER DEPLOYMENT" -ForegroundColor Yellow
+    Write-Host "================================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "This will deploy your application using Docker containers:"
+    Write-Host "- PostgreSQL database in Docker"
+    Write-Host "- Redis cache in Docker" 
+    Write-Host "- Backend API in Docker"
+    Write-Host "- Frontend in Docker"
+    Write-Host "- Nginx reverse proxy in Docker"
+    Write-Host ""
+    
+    $confirm = Read-Host "Continue with Docker deployment? (y/n)"
+    if ($confirm -ne "y") { return }
+
+    Write-Status "Starting Docker deployment..."
+
+    # Upload the Docker deployment script
+    Write-Status "Uploading Docker deployment script..."
+    scp -i $KeyPath scripts/deploy-to-aws-docker.sh ubuntu@${EC2_IP}:~/
+
+    # Execute the Docker deployment
+    Write-Status "Executing Docker deployment on remote server..."
+    
+    $sshCommand = @"
+chmod +x ~/deploy-to-aws-docker.sh
+~/deploy-to-aws-docker.sh
+"@
+
+    ssh -i $KeyPath ubuntu@$EC2_IP $sshCommand
+    Write-Success "Docker deployment completed!"
+    
+    Write-Host ""
+    Write-Host "🐳 Your application is now running in Docker containers!" -ForegroundColor Green
+    Write-Host "🌐 Access your app at: http://$EC2_IP" -ForegroundColor Cyan
+    Write-Host "📚 API documentation: http://$EC2_IP:8000/docs" -ForegroundColor Cyan
+}
+
 function Test-Connection {
     Write-Host "================================================================" -ForegroundColor Yellow
     Write-Host "                   TEST CONNECTION" -ForegroundColor Yellow
@@ -382,8 +422,9 @@ do {
         "4" { Connect-SSH }
         "5" { View-Logs }
         "6" { Restart-Services }
-        "7" { Test-Connection }
-        "8" { 
+        "7" { Docker-Deploy }
+        "8" { Test-Connection }
+        "9" { 
             Write-Host "Goodbye!" -ForegroundColor Green
             exit 0
         }
@@ -393,7 +434,7 @@ do {
         }
     }
     
-    if ($choice -ne "4" -and $choice -ne "8") {
+    if ($choice -ne "4" -and $choice -ne "9") {
         Read-Host "`nPress Enter to continue"
     }
-} while ($choice -ne "8")
+} while ($choice -ne "9")
