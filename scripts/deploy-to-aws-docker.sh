@@ -69,7 +69,15 @@ if ! command -v docker &> /dev/null; then
     print_success "Docker installed successfully"
 else
     print_status "Docker already installed"
+    # Ensure user is in docker group
+    sudo usermod -aG docker $USER
 fi
+
+# Fix Docker permissions
+print_status "Fixing Docker permissions..."
+sudo chmod 666 /var/run/docker.sock || true
+sudo systemctl restart docker
+sleep 5
 
 # Install Docker Compose if not present
 if ! command -v docker-compose &> /dev/null; then
@@ -404,10 +412,11 @@ sudo ufw allow 8000
 print_status "[8/8] Building and starting Docker services..."
 
 # Stop any existing containers
-docker-compose -f docker-compose.production.yml down --remove-orphans || true
+sudo docker-compose -f docker-compose.production.yml down --remove-orphans || true
 
-# Build and start services
-docker-compose -f docker-compose.production.yml up -d --build
+# Build and start services  
+print_status "Building and starting all containers (this may take a few minutes)..."
+sudo docker-compose -f docker-compose.production.yml up -d --build
 
 # Wait for services to be ready
 print_status "Waiting for services to be ready..."
@@ -415,11 +424,11 @@ sleep 30
 
 # Check service status
 print_status "Checking service status..."
-docker-compose -f docker-compose.production.yml ps
+sudo docker-compose -f docker-compose.production.yml ps
 
 # Run database migrations
 print_status "Running database migrations..."
-docker-compose -f docker-compose.production.yml exec -T backend alembic upgrade head || print_warning "Migration failed or not needed"
+sudo docker-compose -f docker-compose.production.yml exec -T backend alembic upgrade head || print_warning "Migration failed or not needed"
 
 # Get public IP
 PUBLIC_IP=$(curl -s ifconfig.me || echo 'Unknown')
@@ -465,18 +474,18 @@ echo "   - Backend API: http://$PUBLIC_IP:8000"
 echo "   - API Docs: http://$PUBLIC_IP:8000/docs"
 echo ""
 echo "🔧 DOCKER MANAGEMENT:"
-echo "   View logs:     docker-compose -f docker-compose.production.yml logs -f"
-echo "   Stop all:      docker-compose -f docker-compose.production.yml down"
-echo "   Start all:     docker-compose -f docker-compose.production.yml up -d"
-echo "   Restart:       docker-compose -f docker-compose.production.yml restart"
-echo "   Status:        docker-compose -f docker-compose.production.yml ps"
+echo "   View logs:     sudo docker-compose -f docker-compose.production.yml logs -f"
+echo "   Stop all:      sudo docker-compose -f docker-compose.production.yml down"
+echo "   Start all:     sudo docker-compose -f docker-compose.production.yml up -d"
+echo "   Restart:       sudo docker-compose -f docker-compose.production.yml restart"
+echo "   Status:        sudo docker-compose -f docker-compose.production.yml ps"
 echo ""
 echo "📊 MONITORING:"
-echo "   Container stats: docker stats"
-echo "   Service health:  docker-compose -f docker-compose.production.yml ps"
-echo "   Backend logs:    docker logs mhia-backend -f"
-echo "   Frontend logs:   docker logs mhia-frontend -f"
-echo "   Database logs:   docker logs mhia-postgres -f"
+echo "   Container stats: sudo docker stats"
+echo "   Service health:  sudo docker-compose -f docker-compose.production.yml ps"
+echo "   Backend logs:    sudo docker logs mhia-backend -f"
+echo "   Frontend logs:   sudo docker logs mhia-frontend -f"
+echo "   Database logs:   sudo docker logs mhia-postgres -f"
 echo ""
 print_success "Deployment completed successfully! 🎉"
 echo ""
