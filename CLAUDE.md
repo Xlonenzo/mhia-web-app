@@ -55,10 +55,13 @@ docker-compose down -v
 ### Windows Local Development
 ```bash
 # Initial setup
-setup-local.bat
+scripts\setup-local.bat
 
 # Start services
-start-local.bat
+scripts\start-local.bat
+
+# Or use the unified deployment script
+deploy.bat
 ```
 
 ## Architecture Overview
