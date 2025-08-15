@@ -1,0 +1,218 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+      - production
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_BACKEND: mhia-backend
+  ECR_REPOSITORY_FRONTEND: mhia-frontend
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+      
+      - name: Run backend tests
+        working-directory: ./backend
+        run: |
+          pytest tests/ --cov=app --cov-report=xml
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+      
+      - name: Run frontend tests
+        working-directory: ./frontend
+        run: |
+          npm run lint
+          npm run type-check
+          npm test -- --coverage --watchAll=false
+
+  build-and-push:
+    name: Build and Push Docker Images
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    outputs:
+      backend-image: ${{ steps.image.outputs.backend }}
+      frontend-image: ${{ steps.image.outputs.frontend }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Build and push backend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_BACKEND }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_BACKEND }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_FRONTEND }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_FRONTEND }}:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Set output
+        id: image
+        run: |
+          echo "backend=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_BACKEND }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "frontend=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_FRONTEND }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy to EC2 via SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands="[
+              'cd /opt/mhia-app',
+              'git pull origin main',
+              'export BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend-image }}',
+              'export FRONTEND_IMAGE=${{ needs.build-and-push.outputs.frontend-image }}',
+              'docker-compose -f docker-compose.prod.yml pull',
+              'docker-compose -f docker-compose.prod.yml up -d --remove-orphans',
+              'docker system prune -f'
+            ]" \
+            --output text
+      
+      - name: Wait for deployment
+        run: sleep 60
+      
+      - name: Health check
+        run: |
+          INSTANCE_IP="${{ secrets.EC2_PUBLIC_IP }}"
+          
+          # Check backend health
+          if curl -f http://$INSTANCE_IP:8000/health; then
+            echo "Backend is healthy"
+          else
+            echo "Backend health check failed"
+            exit 1
+          fi
+          
+          # Check frontend
+          if curl -f http://$INSTANCE_IP:3000; then
+            echo "Frontend is healthy"
+          else
+            echo "Frontend health check failed"
+            exit 1
+          fi
+      
+      - name: Send deployment notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Deployment to ${{ github.event.inputs.environment || 'staging' }} ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  backup:
+    name: Backup Previous Version
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/production'
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Trigger backup via SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands="[
+              '/opt/mhia-app/deployment/scripts/backup.sh'
+            ]" \
+            --output text
