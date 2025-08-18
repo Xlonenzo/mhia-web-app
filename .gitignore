@@ -80,4 +80,4 @@ htmlcov/
 
 # Local development
 .vscode/settings.json
-.idea/
+.idea/package-lock.json

@@ -200,8 +200,13 @@ class MHIADeployment:
         
         print_status("Installing backend dependencies...")
         run_command(f"{pip_cmd} install --upgrade pip setuptools wheel")
-        run_command(f"{pip_cmd} install pydantic-settings")
-        run_command(f"{pip_cmd} install -r requirements.txt")
+        run_command(f"{pip_cmd} install pydantic pydantic-settings")
+        
+        # Install requirements, but handle missing dependencies
+        print_status("Installing requirements.txt dependencies...")
+        if not run_command(f"{pip_cmd} install -r requirements.txt"):
+            print_warning("Some packages from requirements.txt failed, installing core packages...")
+            run_command(f"{pip_cmd} install fastapi uvicorn sqlalchemy alembic psycopg2-binary python-jose passlib python-multipart")
         
         # Create .env file if it doesn't exist
         env_file = self.backend_dir / '.env'
@@ -229,13 +234,19 @@ ENVIRONMENT=development"""
         
         # Clean npm cache and remove platform-specific files on Linux
         if self.platform == 'linux':
-            print_status("Cleaning npm cache for cross-platform compatibility...")
+            print_status("Cleaning npm for cross-platform compatibility...")
             run_command("rm -f package-lock.json", capture_output=True)
             run_command("rm -rf node_modules", capture_output=True)
             run_command("npm cache clean --force", capture_output=True)
+        elif self.platform == 'windows':
+            print_status("Cleaning npm cache...")
+            run_command("if exist package-lock.json del package-lock.json", capture_output=True)
+            run_command("if exist node_modules rmdir /s /q node_modules", capture_output=True)
         
         print_status("Installing frontend dependencies...")
-        run_command("npm install")
+        if not run_command("npm install"):
+            print_warning("npm install failed, trying alternative approach...")
+            run_command("npm install --legacy-peer-deps")
         
         print_status("Building frontend...")
         run_command("npm run build")
