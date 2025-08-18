@@ -200,6 +200,7 @@ class MHIADeployment:
         
         print_status("Installing backend dependencies...")
         run_command(f"{pip_cmd} install --upgrade pip setuptools wheel")
+        run_command(f"{pip_cmd} install pydantic-settings")
         run_command(f"{pip_cmd} install -r requirements.txt")
         
         # Create .env file if it doesn't exist
@@ -225,6 +226,13 @@ ENVIRONMENT=development"""
         """Setup frontend application"""
         print_status("Setting up frontend...")
         os.chdir(self.frontend_dir)
+        
+        # Clean npm cache and remove platform-specific files on Linux
+        if self.platform == 'linux':
+            print_status("Cleaning npm cache for cross-platform compatibility...")
+            run_command("rm -f package-lock.json", capture_output=True)
+            run_command("rm -rf node_modules", capture_output=True)
+            run_command("npm cache clean --force", capture_output=True)
         
         print_status("Installing frontend dependencies...")
         run_command("npm install")
