@@ -29,10 +29,10 @@ echo.
 
 REM Upload and run deployment script
 echo [INFO] Uploading deployment script...
-scp -i scripts\xlon-diego.pem deploy.sh ubuntu@%EC2_IP%:~/
+scp -i xlon-diego.pem deploy.sh ubuntu@%EC2_IP%:~/
 
 echo [INFO] Running deployment...
-ssh -i scripts\xlon-diego.pem ubuntu@%EC2_IP% "chmod +x ~/deploy.sh && ~/deploy.sh"
+ssh -i xlon-diego.pem ubuntu@%EC2_IP% "chmod +x ~/deploy.sh && ~/deploy.sh"
 
 echo.
 echo ===============================================
