@@ -200,13 +200,16 @@ class MHIADeployment:
         
         print_status("Installing backend dependencies...")
         run_command(f"{pip_cmd} install --upgrade pip setuptools wheel")
-        run_command(f"{pip_cmd} install pydantic pydantic-settings")
+        
+        # Install compatible pydantic versions
+        print_status("Installing pydantic with compatible versions...")
+        run_command(f"{pip_cmd} install 'pydantic>=2.0,<3.0' 'pydantic-settings>=2.0,<3.0'")
         
         # Install requirements, but handle missing dependencies
         print_status("Installing requirements.txt dependencies...")
         if not run_command(f"{pip_cmd} install -r requirements.txt"):
             print_warning("Some packages from requirements.txt failed, installing core packages...")
-            run_command(f"{pip_cmd} install fastapi uvicorn sqlalchemy alembic psycopg2-binary python-jose passlib python-multipart")
+            run_command(f"{pip_cmd} install fastapi uvicorn[standard] sqlalchemy alembic psycopg2-binary python-jose[cryptography] 'passlib[bcrypt]' python-multipart python-dotenv")
         
         # Create .env file if it doesn't exist
         env_file = self.backend_dir / '.env'
@@ -232,21 +235,40 @@ ENVIRONMENT=development"""
         print_status("Setting up frontend...")
         os.chdir(self.frontend_dir)
         
-        # Clean npm cache and remove platform-specific files on Linux
+        # Clean everything for cross-platform compatibility
+        print_status("Cleaning npm for cross-platform compatibility...")
         if self.platform == 'linux':
-            print_status("Cleaning npm for cross-platform compatibility...")
             run_command("rm -f package-lock.json", capture_output=True)
             run_command("rm -rf node_modules", capture_output=True)
+            run_command("rm -rf ~/.npm", capture_output=True)  # Remove global npm cache
             run_command("npm cache clean --force", capture_output=True)
         elif self.platform == 'windows':
-            print_status("Cleaning npm cache...")
             run_command("if exist package-lock.json del package-lock.json", capture_output=True)
             run_command("if exist node_modules rmdir /s /q node_modules", capture_output=True)
+            run_command("npm cache clean --force", capture_output=True)
         
         print_status("Installing frontend dependencies...")
-        if not run_command("npm install"):
-            print_warning("npm install failed, trying alternative approach...")
+        # Try multiple approaches for npm install
+        install_success = False
+        
+        # First try: normal install
+        if run_command("npm install"):
+            install_success = True
+        
+        # Second try: with legacy peer deps
+        elif run_command("npm install --legacy-peer-deps"):
+            install_success = True
+        
+        # Third try: install specific packages manually
+        elif self.platform == 'linux':
+            print_status("Installing core frontend packages manually...")
+            run_command("npm install vite @vitejs/plugin-react react react-dom typescript")
             run_command("npm install --legacy-peer-deps")
+            install_success = True
+        
+        if not install_success:
+            print_error("Failed to install npm dependencies")
+            return False
         
         print_status("Building frontend...")
         run_command("npm run build")
