@@ -81,3 +81,11 @@ htmlcov/
 # Local development
 .vscode/settings.json
 .idea/package-lock.json
+
+# Platform-specific lock files (IMPORTANT)
+package-lock.json
+yarn.lock
+frontend/package-lock.json
+frontend/yarn.lock
+backend/package-lock.json
+pnpm-lock.yaml
